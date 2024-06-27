@@ -1,0 +1,88 @@
+---
+- name: Instalar y configurar Zookeeper en RHEL 9
+  hosts: server
+  become: true
+  gather_facts: false
+  vars_files:
+    - variables.yml
+  tasks:
+    # - name: Actualizar los paquetes del sistema
+    #   ansible.builtin.dnf:
+    #     name: '*'
+    #     state: latest
+    - name: Asegurar que Java 11 (OpenJDK) esté instalado
+      ansible.builtin.dnf:
+        name: java-11-openjdk
+        state: present
+    - name: Verificar la instalación de Java
+      ansible.builtin.command: 
+        cmd: java -version
+      register: java_version
+      changed_when: false
+      ignore_errors: true
+    - name: Descargar Zookeeper
+      ansible.builtin.get_url:
+        url: https://dlcdn.apache.org/zookeeper/zookeeper-3.8.4/apache-zookeeper-3.8.4-bin.tar.gz
+        dest: /tmp/apache-zookeeper-3.8.4-bin.tar.gz
+        mode: '0644'
+    - name: Extraer archivo descargado de Zookeeper
+      ansible.builtin.unarchive:
+        src: /tmp/apache-zookeeper-3.8.4-bin.tar.gz
+        dest: /opt/
+        remote_src: true
+    - name: Renombrar directorio de Zookeeper a un nombre más corto
+      ansible.builtin.shell: mv /opt/apache-zookeeper-3.8.4-bin /opt/zookeeper
+      args:
+        creates: /opt/zookeeper
+    - name: Crear directorio de datos de Zookeeper
+      ansible.builtin.file:
+        path: /var/lib/zookeeper
+        state: directory
+        mode: '0755'
+    - name: Abrir puerto 2181 en el firewall
+      ansible.posix.firewalld:
+        port: 2181/tcp
+        permanent: true
+        state: enabled
+      notify: Recargar Firewalld
+    - name: Copiar y reemplazar archivo de configuracion de muestra
+      ansible.builtin.template:
+        src: ./template/zoo.cfg.j2 
+        dest: /opt/zookeeper/conf/zoo.cfg 
+    - name: Establecer permisos para el directorio de Zookeeper
+      ansible.builtin.file:
+        path: /opt/zookeeper
+        owner: root
+        group: root
+        recurse: true
+        state: directory
+        mode: '0755'
+    - name: Verificar el estado de Zookeeper
+      ansible.builtin.shell: /opt/zookeeper/bin/zkServer.sh status
+      register: zk_status
+      ignore_errors: true
+      changed_when: false
+    - name: Iniciar Zookeeper si no está en ejecución
+      ansible.builtin.shell: /opt/zookeeper/bin/zkServer.sh start
+      when: zk_status.rc != 0
+      changed_when: zk_status.rc != 0
+    - name: Verificar el estado de Zookeeper
+      ansible.builtin.shell: /opt/zookeeper/bin/zkServer.sh status
+      register: zk_status_final
+      ignore_errors: true
+      changed_when: false
+    - name: Mostrar mensaje de éxito si Zookeeper está en ejecución
+      ansible.builtin.debug:
+        msg: "Zookeeper se instaló y está ejecutándose correctamente."
+      when: zk_status_final.rc == 0
+      ignore_errors: true
+    - name: Mostrar mensaje de error si Zookeeper no está en ejecución
+      ansible.builtin.debug:
+        msg: "Zookeeper no se pudo iniciar."
+      when: zk_status_final.rc != 0
+      ignore_errors: true
+  handlers:
+    - name: Recargar Firewalld
+      ansible.builtin.command:
+        cmd: firewall-cmd --reload
+      changed_when: false
